@@ -78,11 +78,11 @@ def add_meteor_score(
     columns: list[str] = ["space_cf_standard", "long_name", "comment"],
 ):
     # Need to specify path for NLTK because that is where it will check and see if corpora exists
-    nltk.data.path.append("database/nltk_data")
+    nltk.data.path.append("additional_data/nltk_data")
     try:
         nltk.data.find("corpora/wordnet")
     except LookupError:
-        nltk.download("wordnet", download_dir="database/nltk_data")
+        nltk.download("wordnet", download_dir="additional_data/nltk_data")
 
     # This will add only the highest score it can find among the cols
     def max_meteor_score(row):
