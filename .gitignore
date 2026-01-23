@@ -8,3 +8,9 @@ wheels/
 
 # Virtual environments
 .venv
+
+# extra data
+additional_data
+
+# others
+create_database.py
