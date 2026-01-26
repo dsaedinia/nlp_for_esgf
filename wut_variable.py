@@ -21,7 +21,7 @@ def clone_or_update_tables_repo() -> Repo:
     return repo
 
 
-def parse_table_json(table_path: Path) -> pd.DataFrame:
+def _parse_table_json(table_path: Path) -> pd.DataFrame:
     # load json data as a dict
     with open(table_path) as fin:
         data = json.load(fin)
@@ -31,6 +31,21 @@ def parse_table_json(table_path: Path) -> pd.DataFrame:
     # we want each variable's dict, but also the key as a 'variable_id'
     df = pd.DataFrame(
         [dict(variable_id=v, **row) for v, row in data["variable_entry"].items()]
+    )
+    return df
+
+
+def create_cv_dataframe(repo: Repo) -> pd.DataFrame:
+    """Loop through the json files of the target repo and create a dataframe of CV information."""
+    df = (
+        pd.concat(
+            [
+                _parse_table_json(json_path)
+                for json_path in (Path(repo.working_dir) / "Tables").glob("*.json")
+            ]
+        )
+        .fillna("")
+        .reset_index(drop=True)
     )
     return df
 
