@@ -124,7 +124,7 @@ def add_meteor_score(
 
 
 # still experimenting with rapidfuzz
-def rapid_score(
+def add_rapid_score(
     query: str,
     df: pd.DataFrame,
     columns: list[str] = ["space_cf_standard", "long_name"],
