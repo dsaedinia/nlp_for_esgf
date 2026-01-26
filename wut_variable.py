@@ -2,13 +2,14 @@
 import json
 import sys
 from pathlib import Path
+
+import nltk
 import pandas as pd
 from git import Repo
-import nltk
 from nltk.translate.bleu_score import SmoothingFunction, sentence_bleu
 from nltk.translate.meteor_score import meteor_score
-from scipy.stats import hmean
 from rapidfuzz import fuzz
+from scipy.stats import hmean
 
 
 def clone_or_update_tables_repo() -> Repo:
@@ -29,9 +30,7 @@ def _parse_table_json(table_path: Path) -> pd.DataFrame:
     if "variable_entry" not in data:
         return pd.DataFrame()
     # we want each variable's dict, but also the key as a 'variable_id'
-    df = pd.DataFrame(
-        [dict(variable_id=v, **row) for v, row in data["variable_entry"].items()]
-    )
+    df = pd.DataFrame([dict(variable_id=v, **row) for v, row in data["variable_entry"].items()])
     return df
 
 
@@ -39,10 +38,7 @@ def create_cv_dataframe(repo: Repo) -> pd.DataFrame:
     """Loop through the json files of the target repo and create a dataframe of CV information."""
     df = (
         pd.concat(
-            [
-                _parse_table_json(json_path)
-                for json_path in (Path(repo.working_dir) / "Tables").glob("*.json")
-            ]
+            [_parse_table_json(json_path) for json_path in (Path(repo.working_dir) / "Tables").glob("*.json")]
         )
         .fillna("")
         .reset_index(drop=True)
@@ -64,9 +60,7 @@ def make_all_lower(df: pd.DataFrame) -> pd.DataFrame:
 
 def add_specifity(query_list: list[str], df: pd.DataFrame):
     """1 if there is an exact match, 0 if not."""
-    df["specifity"] = (
-        df["variable_id"].isin(query_list) | df["standard_name"].isin(query_list)
-    ).astype(bool)
+    df["specifity"] = (df["variable_id"].isin(query_list) | df["standard_name"].isin(query_list)).astype(bool)
     return df
 
 
@@ -77,9 +71,7 @@ def add_bleu_score(
 ):
     df["bleu_score"] = df[columns].apply(
         lambda row: round(
-            sentence_bleu(
-                row.to_list(), query, smoothing_function=SmoothingFunction().method1
-            ),
+            sentence_bleu(row.to_list(), query, smoothing_function=SmoothingFunction().method1),
             4,
         ),
         axis=1,
@@ -171,9 +163,7 @@ if __name__ == "__main__":
     df = add_rapid_score(QUERY_STRING, df)
     df = add_bleu_score(QUERY_STRING, df)
     df = add_meteor_score(QUERY_STRING.split(), df)
-    df = add_harmonic_mean(
-        df, columns=["bleu_score", "rapid_score", "max_meteor_score"]
-    )
+    df = add_harmonic_mean(df, columns=["bleu_score", "rapid_score", "max_meteor_score"])
 
     # Try out different filters ---------------------------------------
 
@@ -188,8 +178,7 @@ if __name__ == "__main__":
     df_filtered = df[
         df.apply(
             lambda row: any(
-                row[col] > desc.loc[f"{int(round(ACCEPT_PERCENTILE * 100))}%", col]
-                for col in score_columns
+                row[col] > desc.loc[f"{int(round(ACCEPT_PERCENTILE * 100))}%", col] for col in score_columns
             ),
             axis=1,
         )
