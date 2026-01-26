@@ -62,11 +62,11 @@ def make_all_lower(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def add_specifity_score(query_list: list[str], df: pd.DataFrame):
+def add_specifity(query_list: list[str], df: pd.DataFrame):
     """1 if there is an exact match, 0 if not."""
-    df["specifity_score"] = (
+    df["specifity"] = (
         df["variable_id"].isin(query_list) | df["standard_name"].isin(query_list)
-    ).astype(float)
+    ).astype(bool)
     return df
 
 
