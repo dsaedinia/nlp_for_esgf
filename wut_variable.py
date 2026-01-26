@@ -21,7 +21,7 @@ def clone_or_update_tables_repo() -> Repo:
     return repo
 
 
-def parse_table_json(table_path: Path) -> pd.DataFrame:
+def _parse_table_json(table_path: Path) -> pd.DataFrame:
     # load json data as a dict
     with open(table_path) as fin:
         data = json.load(fin)
@@ -31,6 +31,21 @@ def parse_table_json(table_path: Path) -> pd.DataFrame:
     # we want each variable's dict, but also the key as a 'variable_id'
     df = pd.DataFrame(
         [dict(variable_id=v, **row) for v, row in data["variable_entry"].items()]
+    )
+    return df
+
+
+def create_cv_dataframe(repo: Repo) -> pd.DataFrame:
+    """Loop through the json files of the target repo and create a dataframe of CV information."""
+    df = (
+        pd.concat(
+            [
+                _parse_table_json(json_path)
+                for json_path in (Path(repo.working_dir) / "Tables").glob("*.json")
+            ]
+        )
+        .fillna("")
+        .reset_index(drop=True)
     )
     return df
 
@@ -47,11 +62,11 @@ def make_all_lower(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def add_specifity_score(query_list: list[str], df: pd.DataFrame):
+def add_specifity(query_list: list[str], df: pd.DataFrame):
     """1 if there is an exact match, 0 if not."""
-    df["specifity_score"] = (
+    df["specifity"] = (
         df["variable_id"].isin(query_list) | df["standard_name"].isin(query_list)
-    ).astype(float)
+    ).astype(bool)
     return df
 
 
@@ -109,7 +124,7 @@ def add_meteor_score(
 
 
 # still experimenting with rapidfuzz
-def rapid_score(
+def add_rapid_score(
     query: str,
     df: pd.DataFrame,
     columns: list[str] = ["space_cf_standard", "long_name"],
@@ -129,53 +144,59 @@ def rapid_score(
     return df
 
 
+def add_harmonic_mean(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    """Add a harmonic mean of the given columns"""
+    df["hmean_score"] = df.apply(
+        lambda row: hmean([row[col] for col in columns]),
+        axis=1,
+    )
+    return df
+
+
 if __name__ == "__main__":
-    BLEU_THRESHOLD = 0.7
+    ACCEPT_PERCENTILE = 0.95
     if len(sys.argv) > 1:
         QUERY_STRING = sys.argv[1]
     else:
         QUERY_STRING = "air temperature"
 
+    # Initialization
     repo = clone_or_update_tables_repo()
-    df = (
-        pd.concat(
-            [
-                parse_table_json(json_path)
-                for json_path in (Path(repo.working_dir) / "Tables").glob("*.json")
-            ]
-        )
-        .fillna("")
-        .reset_index()
-    )
-
-    # print(df[["variable_id", "standard_name", "long_name", "comment"]])
-
+    df = create_cv_dataframe(repo)
     df = make_all_lower(df)
     df = add_standard_name_variant(df)
 
-    df = add_specifity_score(QUERY_STRING.split(), df)
-    if df["specifity_score"].max() > 0.99:
-        df = df[df["specifity_score"] > 0.99]
-
-    df = rapid_score(QUERY_STRING, df)
+    # Add scores
+    df = add_specifity(QUERY_STRING.split(), df)
+    df = add_rapid_score(QUERY_STRING, df)
     df = add_bleu_score(QUERY_STRING, df)
     df = add_meteor_score(QUERY_STRING.split(), df)
-
-    print("Sort by bleu score:")
-    print(df.sort_values("bleu_score", ascending=False))
-
-    print("Sort by max meteor score:")
-    print(df.sort_values("max_meteor_score", ascending=False))
-
-    # print("Sort by combined meteor score:")
-    # print(df.sort_values("combined_meteor_score", ascending=False))
-
-    print("Sort by rapidfuzz score:")
-    print(df.sort_values("rapid_score", ascending=False))
-
-    # add harmonic mean - unsure of this will be helpful as of now
-    df["hmean_score"] = df.apply(
-        lambda row: hmean([row["bleu_score"], row["max_meteor_score"]]),
-        axis=1,
+    df = add_harmonic_mean(
+        df, columns=["bleu_score", "rapid_score", "max_meteor_score"]
     )
-    print(df.sort_values("hmean_score", ascending=False))
+
+    # Try out different filters ---------------------------------------
+
+    # If the input phrase uses an exact match of the CV, get rid of everything else
+    if df["specifity"].max():
+        df = df[df["specifity"]]
+
+    # Let's try a filter where we show only the dataframe that lies in the top
+    # 10% of at least one of the scores
+    desc = df.describe(percentiles=[ACCEPT_PERCENTILE])
+    score_columns = [col for col in df.columns if "score" in col]
+    df_filtered = df[
+        df.apply(
+            lambda row: any(
+                row[col] > desc.loc[f"{int(round(ACCEPT_PERCENTILE * 100))}%", col]
+                for col in score_columns
+            ),
+            axis=1,
+        )
+    ]
+    print(
+        df_filtered.sort_values(
+            ["hmean_score", "bleu_score", "rapid_score", "max_meteor_score"],
+            ascending=False,
+        )
+    )
