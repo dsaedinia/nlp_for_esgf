@@ -5,11 +5,24 @@ from pathlib import Path
 
 import nltk
 import pandas as pd
+import spacy
+from bert_score import BERTScorer
 from git import Repo
 from nltk.translate.bleu_score import SmoothingFunction, sentence_bleu
 from nltk.translate.meteor_score import meteor_score
 from rapidfuzz import fuzz
 from scipy.stats import hmean
+from sentence_transformers import SentenceTransformer
+
+# Initialize models once globally
+bert_scorer = BERTScorer(model_type="bert-base-uncased")
+sbert_model = SentenceTransformer("all-MiniLM-L6-v2")
+
+
+def extract_noun_phrases(text: str) -> list[str]:
+    nlp = spacy.load("en_core_web_sm")
+    doc = nlp(text)
+    return [chunk.text.lower() for chunk in doc.noun_chunks]
 
 
 def clone_or_update_tables_repo() -> Repo:
@@ -115,24 +128,71 @@ def add_meteor_score(
     return df
 
 
-# still experimenting with rapidfuzz
+# Rapidfuzz implementation
 def add_rapid_score(
     query: str,
     df: pd.DataFrame,
     columns: list[str] = ["space_cf_standard", "long_name"],
 ):
-    # for now focussing on cf standard and longname for rapidfuzz
+    # for now focussing on cf standard and longname for rapidfuzz --> comments are too noisy
     def rapid_max_token_sort(row):
         scores = []
         for col in columns:
             col_value = str(row[col]).replace("_", " ")
-            # fuzz includes several methods, token_sort_ratio as a start
+            # fuzz includes a few methods, token_sort_ratio as a start
             # surface air temperature = air surface temperature treated the same
             score = fuzz.token_sort_ratio(query.lower(), col_value)
             scores.append(score)
         return round(max(scores) / 100, 4)
 
     df["rapid_score"] = df[columns].apply(rapid_max_token_sort, axis=1)
+    return df
+
+
+def add_BERT_score(
+    query: str, df: pd.DataFrame, columns: list[str] = ["space_cf_standard", "long_name", "comment"]
+) -> pd.DataFrame:
+    """
+    Add BERTScore column to dataframe --> Allows for semantic similarity, but may require extra processing
+    """
+
+    def max_BERT_score(row):
+        scores = []
+        for col in columns:
+            col_value = str(row[col]).replace("_", " ")
+            if col_value:
+                P, R, F1 = bert_scorer.score([query], [col_value])
+            else:
+                scores.append(0.0)
+                continue
+            scores.append(F1.mean().item())
+        return round(max(scores), 4)
+
+    df["max_BERT_score"] = df[columns].apply(max_BERT_score, axis=1)
+    return df
+
+
+# SBERT is similar to BERT but optimized for sentence similarity
+# Key point being it is faster
+def add_SBERT_score(
+    query: str, df: pd.DataFrame, columns: list[str] = ["space_cf_standard", "long_name", "comment"]
+) -> pd.DataFrame:
+    query_embedding = sbert_model.encode(query, convert_to_tensor=True)
+
+    def max_SBERT_score(row):
+        scores = []
+        for col in columns:
+            col_value = str(row[col]).replace("_", " ")
+            # sometimes the value is an empty string and some metrics don't like that
+            if col_value:
+                col_embedding = sbert_model.encode(col_value, convert_to_tensor=True)
+                similarity_score = sbert_model.similarity(query_embedding, col_embedding).item()
+                scores.append(similarity_score)
+            else:
+                scores.append(0.0)
+        return round(max(scores), 4)
+
+    df["max_SBERT_score"] = df[columns].apply(max_SBERT_score, axis=1)
     return df
 
 
@@ -150,7 +210,7 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         QUERY_STRING = sys.argv[1]
     else:
-        QUERY_STRING = "air temperature"
+        QUERY_STRING = "search for minimum air temperature and maximum air temperature"
 
     # Initialization
     repo = clone_or_update_tables_repo()
@@ -158,34 +218,53 @@ if __name__ == "__main__":
     df = make_all_lower(df)
     df = add_standard_name_variant(df)
 
-    # Add scores
-    df = add_specifity(QUERY_STRING.split(), df)
-    df = add_rapid_score(QUERY_STRING, df)
-    df = add_bleu_score(QUERY_STRING, df)
-    df = add_meteor_score(QUERY_STRING.split(), df)
-    df = add_harmonic_mean(df, columns=["bleu_score", "rapid_score", "max_meteor_score"])
+    # extract noun phrases from query
+    noun_phrases = extract_noun_phrases(QUERY_STRING)
+    print(noun_phrases)
+    for phrase in noun_phrases:
+        print(f"Noun phrase: {phrase}")
+        # Add scores
+        df = add_specifity(phrase.split(), df)
+        df = add_rapid_score(phrase, df)
+        df = add_bleu_score(phrase, df)
+        df = add_meteor_score(phrase.split(), df)
 
-    # Try out different filters ---------------------------------------
+        # Adding semantic based scores using embeddings - heavier cost
+        # BERT adds a significant amount of time
+        df = add_BERT_score(phrase, df)
+        # SBERT should be quicker than BERT
+        df = add_SBERT_score(phrase, df)
 
-    # If the input phrase uses an exact match of the CV, get rid of everything else
-    if df["specifity"].max():
-        df = df[df["specifity"]]
-
-    # Let's try a filter where we show only the dataframe that lies in the top
-    # 10% of at least one of the scores
-    desc = df.describe(percentiles=[ACCEPT_PERCENTILE])
-    score_columns = [col for col in df.columns if "score" in col]
-    df_filtered = df[
-        df.apply(
-            lambda row: any(
-                row[col] > desc.loc[f"{int(round(ACCEPT_PERCENTILE * 100))}%", col] for col in score_columns
-            ),
-            axis=1,
+        df = add_harmonic_mean(
+            df, columns=["bleu_score", "rapid_score", "max_meteor_score", "max_SBERT_score"]
         )
-    ]
-    print(
-        df_filtered.sort_values(
-            ["hmean_score", "bleu_score", "rapid_score", "max_meteor_score"],
-            ascending=False,
+
+        # If the input phrase uses an exact match of the CV, get rid of everything else
+        if df["specifity"].max():
+            df = df[df["specifity"]]
+
+        # Let's try a filter where we show only the dataframe that lies in the top
+        # 10% of at least one of the scores
+        desc = df.describe(percentiles=[ACCEPT_PERCENTILE])
+        score_columns = [col for col in df.columns if "score" in col]
+        df_filtered = df[
+            df.apply(
+                lambda row: any(
+                    row[col] > desc.loc[f"{int(round(ACCEPT_PERCENTILE * 100))}%", col]
+                    for col in score_columns
+                ),
+                axis=1,
+            )
+        ]
+        print(
+            df_filtered.sort_values(
+                [
+                    "hmean_score",
+                    "bleu_score",
+                    "rapid_score",
+                    "max_meteor_score",
+                    "max_SBERT_score",
+                ],
+                ascending=False,
+            )
         )
-    )
