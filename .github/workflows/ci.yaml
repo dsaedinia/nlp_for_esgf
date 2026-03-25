@@ -3,7 +3,7 @@ on: # when will this script run?
   push:
     branches:
       - main
-      - master 
+      - master
   pull_request:
     branches:
       - main
