@@ -41,6 +41,9 @@ jobs:
 
       - name: Install environment
         run: uv sync --group dev
+    
+      - name: Run setup
+        run: bash setup.sh
 
       - name: Run pre-commit checks
         run: uv run --group dev pre-commit run -a
