@@ -3,6 +3,10 @@
 
 This repository contains initial natural language processing (NLP) efforts for the Earth System Grid Federation (ESGF).
 
+## Badges
+
+[![Continuous Integration][ci-badge]][ci-link]
+
 ## Overview
 
 This project explores NLP techniques and tools applied to data served by the Earth Sytem Grid Federation (ESGF)
@@ -20,3 +24,7 @@ Then run the following command to install the required packages:
 ```bash
 bash setup.sh
 ```
+
+[ci-badge]: https://github.com/dsaedinia/nlp_for_esgf/actions/workflows/ci.yml/badge.svg?
+branch=main
+[ci-link]: <https://github.com/dsaedinia/nlp_for_esgf/actions/workflows/ci.yml>
