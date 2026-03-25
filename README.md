@@ -25,6 +25,5 @@ Then run the following command to install the required packages:
 bash setup.sh
 ```
 
-[ci-badge]: https://github.com/dsaedinia/nlp_for_esgf/actions/workflows/ci.yml/badge.svg?
-branch=main
-[ci-link]: <https://github.com/dsaedinia/nlp_for_esgf/actions/workflows/ci.yml>
+[ci-badge]: https://github.com/dsaedinia/nlp_for_esgf/actions/workflows/ci.yml/badge.svg?branch=master
+[ci-link]: https://github.com/dsaedinia/nlp_for_esgf/actions/workflows/ci.yml
