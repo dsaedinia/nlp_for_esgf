@@ -1,0 +1,47 @@
+name: CI
+on: # when will this script run?
+  push:
+    branches:
+      - main 
+  pull_request:
+    branches:
+      - main 
+  schedule:
+    - cron: "0 0 * * *" # 3) daily at midnight
+  workflow_dispatch: # 4) manually from github
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.os }}-${{ matrix.python-version }}
+    if: github.repository == 'dsaedinia/nlp_for_esgf'
+    runs-on: ${{ matrix.os }}-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash -l {0}
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12"] #, "3.13"]
+        os: [ubuntu] #, macos, windows]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv environment
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Install environment
+        run: uv sync --group dev
+
+      - name: Run pre-commit checks
+        run: uv run --group dev pre-commit run -a
+
+      - name: Run tests
+        run: uv run pytest
