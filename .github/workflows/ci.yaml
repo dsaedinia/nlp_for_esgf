@@ -41,7 +41,7 @@ jobs:
 
       - name: Install environment
         run: uv sync --group dev
-    
+
       - name: Run setup
         run: bash setup.sh
 
