@@ -2,10 +2,12 @@ name: CI
 on: # when will this script run?
   push:
     branches:
-      - main 
+      - main
+      - master 
   pull_request:
     branches:
-      - main 
+      - main
+      - master
   schedule:
     - cron: "0 0 * * *" # 3) daily at midnight
   workflow_dispatch: # 4) manually from github
