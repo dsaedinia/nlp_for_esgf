@@ -2,19 +2,24 @@ import json
 import sys
 from pathlib import Path
 
+import chromadb
 import pandas as pd
 import spacy
 from git import Repo
-from rapidfuzz import fuzz
-from sentence_transformers import SentenceTransformer
+
+# from sentence_transformers import SentenceTransformer
 
 # Load global models
 nlp = spacy.load("en_core_web_sm")
-sbert_model = SentenceTransformer("all-MiniLM-L6-v2")
+# sbert_model = SentenceTransformer("all-MiniLM-L6-v2")
 
 # ACCEPT_PERCENTILE = 0.70
-TOP_K_RAPID = 15
+TOP_K_QUERY = 20
 TOP_K_FINAL = 10
+
+# Persistent chromaDB
+CHROMA_PATH = Path.home() / ".cache" / "NLP_for_ESGF" / "chroma"
+chroma_client = chromadb.PersistentClient(path=str(CHROMA_PATH))
 
 
 def extract_noun_phrases(text: str) -> list[str]:
@@ -27,7 +32,7 @@ def extract_noun_phrases(text: str) -> list[str]:
 
 
 def clone_or_update_tables_repo() -> Repo:
-    local = Path.home() / ".cache" / "esgf-wut" / "cmip6-cmor-tables"
+    local = Path.home() / ".cache" / "NLP_for_ESGF" / "cmip6-cmor-tables"
     if not (local / ".git").exists():
         local.mkdir(exist_ok=True, parents=True)
         repo = Repo.clone_from("https://github.com/PCMDI/cmip6-cmor-tables", local)
@@ -64,10 +69,10 @@ def create_cv_dataframe(repo: Repo) -> pd.DataFrame:
     return df
 
 
-def add_standard_name_variant(df) -> pd.DataFrame:
-    """Sometimes the long name isn't helpful and the standard name is better."""
-    df["space_cf_standard"] = df["standard_name"].str.replace("_", " ")
-    return df
+# def add_standard_name_variant(df) -> pd.DataFrame:
+#     """Sometimes the long name isn't helpful and the standard name is better."""
+#     df["space_cf_standard"] = df["standard_name"].str.replace("_", " ")
+#     return df
 
 
 def make_all_lower(df: pd.DataFrame) -> pd.DataFrame:
@@ -76,9 +81,34 @@ def make_all_lower(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-########################
-# Metrics start here
-#########################
+def get_collection(
+    df: pd.DataFrame,
+    columns: list[str] = ["variable_id", "standard_name", "long_name", "comment"],
+):
+    """Get or create a chroma collection for variable information."""
+
+    # {"hnsw:space": "cosine"} is a parameter that tells chroma to use cosine similarity for vector comparisons --> ideal for text similarity
+    collection = chroma_client.get_or_create_collection(name="variables", metadata={"hnsw:space": "cosine"})
+    if collection.count() > 0:
+        return collection
+
+    # A document here refers to a variables info cols like long name, standard name, comment etc.
+    ids, docs, metas = [], [], []
+    for _, row in df.iterrows():
+        variable = row["variable_id"]
+        for col in columns:
+            value = str(row[col]).replace("_", " ").strip()
+            if value:
+                ids.append(f"{variable}:{col}")
+                docs.append(value)
+                metas.append({"variable_id": variable})
+    collection.add(ids=ids, documents=docs, metadatas=metas)
+    return collection
+
+
+#######################
+# Search Funtions     #
+#######################
 def add_specifity(query: str, df: pd.DataFrame):
     """1 if there is an exact match, 0 if not."""
     tokens = query.split()
@@ -86,96 +116,60 @@ def add_specifity(query: str, df: pd.DataFrame):
     return df
 
 
-# SBERT is similar to BERT but optimized for sentence similarity
-# Key point being it is faster
-def add_SBERT_score(
-    query: str, df: pd.DataFrame, columns: list[str] = ["space_cf_standard", "long_name", "comment"]
-) -> pd.DataFrame:
-    query_embedding = sbert_model.encode(query, convert_to_tensor=True)
-
-    def max_SBERT_score(row):
-        scores = []
-        for col in columns:
-            col_value = str(row[col]).replace("_", " ")
-            # sometimes the value is an empty string and some metrics don't like that
-            if col_value:
-                col_embedding = sbert_model.encode(col_value, convert_to_tensor=True)
-                similarity_score = sbert_model.similarity(query_embedding, col_embedding).item()
-                scores.append(similarity_score)
-            else:
-                scores.append(0.0)
-        return round(max(scores), 4)
-
-    df["max_SBERT_score"] = df[columns].apply(max_SBERT_score, axis=1)
-    return df
-
-
-# Rapidfuzz implementation
-def add_rapid_score(
-    query: str,
+def find_best_match(
     df: pd.DataFrame,
-    columns: list[str] = ["space_cf_standard", "long_name"],
-):
-    # for now focussing on cf standard and longname for rapidfuzz --> comments are too noisy
-    def rapid_max_token_sort(row):
-        scores = []
-        for col in columns:
-            col_value = str(row[col]).replace("_", " ")
-            # fuzz includes a few methods, token_sort_ratio as a start
-            # surface air temperature = air surface temperature treated the same
-            score = fuzz.token_sort_ratio(query.lower(), col_value)
-            scores.append(score)
-        return round(max(scores) / 100, 4)
-
-    df["rapid_score"] = df[columns].apply(rapid_max_token_sort, axis=1)
-    return df
-
-
-def find_best_match(df: pd.DataFrame, phrase: str):
-    df_filtered = df.copy()
+    phrase: str,
+    columns: list[str] = ["variable_id", "standard_name", "long_name", "comment"],
+) -> pd.DataFrame:
+    df_filtered = df[columns].copy()
 
     # Specificity --> Exact matches
     df_filtered = add_specifity(phrase, df_filtered)
     if df_filtered["specifity"].any():
-        return df_filtered[df_filtered["specifity"]].head(TOP_K_FINAL)
+        return df_filtered[df_filtered["specifity"]]
 
-    # Rapidfuzz score -->  Fast metric for fuzzy matching
-    df_filtered = add_rapid_score(phrase, df_filtered)
-    df_filtered = df_filtered.nlargest(TOP_K_RAPID, "rapid_score")
+    # Semantic embedding and lookup will pull up variable IDs that match
+    results = collection.query(query_texts=[phrase], n_results=TOP_K_QUERY)
 
-    # SBERT score rerank --> Slower but more semantically aware metric
-    df_filtered = add_SBERT_score(phrase, df_filtered)
-    df_filtered = df_filtered.sort_values("max_SBERT_score", ascending=False)
+    # Keep track of variables that we've already seen since the results may have duplicates -->
+    # e.g. pr:longname, pr:space_standard_name
+    # Results are already sorted by score so first hit will be the "MAX" score
+    seen: dict[str, float] = {}
+    result_list = zip(results["metadatas"][0], results["distances"][0])
+    for meta, dist in result_list:
+        variable_id = meta["variable_id"]
+        if variable_id not in seen:
+            seen[variable_id] = 1 - dist
 
-    return df_filtered.head(TOP_K_FINAL)
+    top_results = list(seen.keys())[:TOP_K_FINAL]
+    df_filtered = df_filtered[df_filtered["variable_id"].isin(top_results)]
+    df_filtered["similarity_score"] = df_filtered["variable_id"].map(seen)
+
+    return df_filtered.sort_values("similarity_score", ascending=False)
 
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
         QUERY_STRING = sys.argv[1]
     else:
-        QUERY_STRING = "search for soil moisture content, tas and minimum air temperature"
+        QUERY_STRING = "npp"
 
     # Initialization
     repo = clone_or_update_tables_repo()
     df = create_cv_dataframe(repo)
     df = make_all_lower(df)
-    df = add_standard_name_variant(df)
 
     # extract noun phrases
     noun_phrases = extract_noun_phrases(QUERY_STRING)
-    all_results = {}
+    # Get or create collection and query for relevant variables based on noun phrases
+    collection = get_collection(df)
 
     # We will loop through each noun phrase and find the best match for each using complementary metrics
-    variables_found = set()
+    if len(noun_phrases) == 0:
+        print("No noun phrases found in the query. Please try a different query.")
+
     for phrase in noun_phrases:
         df_filtered = find_best_match(df, phrase)
-        print(f"Top matches for '{phrase}':")
         if not df_filtered.empty:
+            print(f"\nTop results for '{phrase}' within our database:")
             print(df_filtered)
-            variables_found.add((phrase, df_filtered["variable_id"].iloc[0]))
-    # printing only top variables found per noun phrase
-    # NOTE: we could have multiple variables with tied scores but this is defaulting to one for now
-    print("Top variables found across all noun phrases: ")
-    for phrase, var in variables_found:
-        print(f"{phrase} --> {var}")
