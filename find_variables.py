@@ -7,11 +7,8 @@ import pandas as pd
 import spacy
 from git import Repo
 
-# from sentence_transformers import SentenceTransformer
-
 # Load global models
 nlp = spacy.load("en_core_web_sm")
-# sbert_model = SentenceTransformer("all-MiniLM-L6-v2")
 
 # ACCEPT_PERCENTILE = 0.70
 TOP_K_QUERY = 20
@@ -19,16 +16,13 @@ TOP_K_FINAL = 10
 
 # Persistent chromaDB
 CHROMA_PATH = Path.home() / ".cache" / "NLP_for_ESGF" / "chroma"
+# Using default chromaDB embedding model all-MiniLM-L6-v2
 chroma_client = chromadb.PersistentClient(path=str(CHROMA_PATH))
 
 
 def extract_noun_phrases(text: str) -> list[str]:
     doc = nlp(text)
     return [chunk.text.lower() for chunk in doc.noun_chunks]
-
-    # When adding other facets later with fewer options we will need to extract those phrases out to avoid
-    # a situation like monthly soil moisture content being split into "monthly soil moisture content" and not
-    # monthly, soil moisture content
 
 
 def clone_or_update_tables_repo() -> Repo:
@@ -69,12 +63,6 @@ def create_cv_dataframe(repo: Repo) -> pd.DataFrame:
     return df
 
 
-# def add_standard_name_variant(df) -> pd.DataFrame:
-#     """Sometimes the long name isn't helpful and the standard name is better."""
-#     df["space_cf_standard"] = df["standard_name"].str.replace("_", " ")
-#     return df
-
-
 def make_all_lower(df: pd.DataFrame) -> pd.DataFrame:
     """Not sure this matters, just in case."""
     df["long_name"] = df["long_name"].str.lower()
@@ -107,7 +95,7 @@ def get_collection(
 
 
 #######################
-# Search Funtions     #
+# Search Functions     #
 #######################
 def add_specifity(query: str, df: pd.DataFrame):
     """1 if there is an exact match, 0 if not."""
@@ -152,7 +140,7 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         QUERY_STRING = sys.argv[1]
     else:
-        QUERY_STRING = "npp"
+        QUERY_STRING = "minimum air temperature"
 
     # Initialization
     repo = clone_or_update_tables_repo()
