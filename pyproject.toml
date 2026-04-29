@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "backoff>=2.2.1",
     "bert-score>=0.3.13",
+    "chromadb>=1.5.8",
     "gitpython>=3.1.46",
     "nltk>=3.9.2",
     "pandas>=3.0.0",
@@ -26,6 +27,7 @@ target-version = "py311"
 [tool.ruff.lint] # see https://docs.astral.sh/ruff/rules/ for what these mean
 select = ["E", "F", "I"]
 ignore = ["E501"]
+unfixable = ["F401"]
 
 [dependency-groups]
 dev = [
